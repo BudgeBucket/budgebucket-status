@@ -1,0 +1,47 @@
+name: Verify Encryption
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Check EBS encryption
+        run: |
+          echo "=== EBS Volumes ==="
+          aws ec2 describe-volumes \
+            --query "Volumes[*].{ID:VolumeId,Encrypted:Encrypted,Size:Size,State:State,Type:VolumeType}" \
+            --output table
+
+          echo ""
+          echo "=== EBS Encryption Default ==="
+          aws ec2 get-ebs-encryption-by-default --output json
+
+      - name: Check RDS encryption
+        run: |
+          echo "=== RDS Instances ==="
+          aws rds describe-db-instances \
+            --query "DBInstances[*].{ID:DBInstanceIdentifier,Engine:Engine,Encrypted:StorageEncrypted,KmsKey:KmsKeyId,Endpoint:Endpoint.Address}" \
+            --output table
+
+      - name: Check S3 encryption
+        run: |
+          echo "=== S3 Buckets ==="
+          for bucket in $(aws s3api list-buckets --query "Buckets[*].Name" --output text); do
+            ENC=$(aws s3api get-bucket-encryption --bucket "$bucket" --query "ServerSideEncryptionConfiguration.Rules[0].ApplyServerSideEncryptionByDefault.SSEAlgorithm" --output text 2>/dev/null || echo "NONE")
+            echo "$bucket: $ENC"
+          done
+
+      - name: Check CloudFront TLS
+        run: |
+          echo "=== CloudFront Distributions ==="
+          aws cloudfront list-distributions \
+            --query "DistributionList.Items[*].{ID:Id,Domain:DomainName,TLS:ViewerCertificate.MinimumProtocolVersion,HttpsOnly:DefaultCacheBehavior.ViewerProtocolPolicy}" \
+            --output table
