@@ -1,0 +1,59 @@
+name: Update Status Dashboard
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch deploy status
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          REPOS="budgebucket-frontend budgebucket-gateway budgebucket-auth-service budgebucket-admin-service budgebucket-client-service budgebucket-engagement-service budgebucket-lookup-service budgebucket-mailbox-service budgebucket-shared"
+
+          echo "| Service | Status | Commit | When | Duration |" > status.md
+          echo "|---------|--------|--------|------|----------|" >> status.md
+
+          for repo in $REPOS; do
+            DATA=$(curl -s -H "Authorization: token $GH_TOKEN" \
+              "https://api.github.com/repos/BudgeBucket/$repo/actions/runs?per_page=1")
+
+            STATUS=$(echo "$DATA" | jq -r '.workflow_runs[0].conclusion // "none"')
+            MSG=$(echo "$DATA" | jq -r '.workflow_runs[0].head_commit.message // "—"' | head -1 | cut -c1-50)
+            WHEN=$(echo "$DATA" | jq -r '.workflow_runs[0].updated_at // "—"')
+            RUN_ID=$(echo "$DATA" | jq -r '.workflow_runs[0].id // ""')
+
+            if [ "$STATUS" = "success" ]; then
+              ICON="✅"
+            elif [ "$STATUS" = "failure" ]; then
+              ICON="❌"
+            elif [ "$STATUS" = "in_progress" ]; then
+              ICON="🔄"
+            else
+              ICON="⚪"
+            fi
+
+            SHORT_NAME=$(echo "$repo" | sed 's/budgebucket-//')
+            LINK="https://github.com/BudgeBucket/$repo/actions/runs/$RUN_ID"
+
+            echo "| **$SHORT_NAME** | $ICON $STATUS | $MSG | $WHEN | [$repo]($LINK) |" >> status.md
+          done
+
+          echo "" >> status.md
+          echo "_Last updated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')_" >> status.md
+
+          # Replace the status table in README
+          sed -i '/<!-- STATUS_TABLE_START -->/,/<!-- STATUS_TABLE_END -->/!b;/<!-- STATUS_TABLE_START -->/!{/<!-- STATUS_TABLE_END -->/!d};/<!-- STATUS_TABLE_END -->/r status.md' README.md
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git diff --cached --quiet || (git commit -m "chore: update deploy status [skip ci]" && git push)
