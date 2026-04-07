@@ -25,13 +25,13 @@
 
 | Tool | Type | Result | Details |
 |------|------|--------|---------|
-| **Semgrep** | SAST | ⏳ Pending | — |
-| **Snyk** | SCA (Dependencies) | ⏳ Pending | — |
-| **StrykerJS** | Mutation Testing | ⏳ Pending | — |
-| **OWASP ZAP** | DAST | ⏳ Pending | — |
-| **Burp Suite** | Penetration Test | ⏳ Pending | — |
+| **Semgrep** | SAST | ✅ Clean | 0 findings |
+| **Snyk** | SCA (Dependencies) | ✅ Clean | 0 high+ vulns |
+| **StrykerJS** | Mutation Testing | ⏭️ Skipped | Score: —% |
+| **OWASP ZAP** | DAST | ⏭️ Skipped | — alerts |
+| **Burp Suite** | Penetration Test | ⏭️ Skipped | 0 passed, — failed |
 
-> _No scan has been run yet. Trigger one from [Actions](https://github.com/BudgeBucket/github-repos/actions/workflows/security-scan.yml)._
+> Last scan: **2026-04-07 04:00 UTC** by **m539rajesh** — [View run](https://github.com/BudgeBucket/budgebucket-status/actions/runs/24063535266)
 
 <!-- SECURITY_TABLE_END -->
 
