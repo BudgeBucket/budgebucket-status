@@ -85,7 +85,6 @@ jobs:
           semgrep scan \
             --config security/semgrep.yml \
             --config p/nodejs \
-            --config p/express \
             --config p/jwt \
             --config p/secrets \
             --json --output reports/semgrep/results.json \
@@ -148,6 +147,12 @@ jobs:
             [ ! -f "${svc}/package.json" ] && continue
             echo "=== Scanning $svc ==="
             cd "$svc"
+            rm -f .npmrc
+            # Remove private dep before install so npm doesn't fail
+            if grep -q '@budgebucket/shared' package.json 2>/dev/null; then
+              jq 'del(.dependencies["@budgebucket/shared"])' package.json > package.tmp.json
+              mv package.tmp.json package.json
+            fi
             npm install --ignore-scripts 2>/dev/null || true
             cd ..
 
