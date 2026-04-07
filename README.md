@@ -25,13 +25,13 @@
 
 | Tool | Type | Result | Details |
 |------|------|--------|---------|
-| **Semgrep** | SAST | ✅ Clean | 0 findings |
-| **Snyk** | SCA (Dependencies) | ✅ Clean | 0 high+ vulns |
-| **StrykerJS** | Mutation Testing | ⏭️ Skipped | Score: —% |
-| **OWASP ZAP** | DAST | ⏭️ Skipped | — alerts |
-| **Burp Suite** | Penetration Test | ⏭️ Skipped | 0 passed, — failed |
+| **Semgrep** | SAST | PASS Clean | 0 findings |
+| **Snyk** | SCA (Dependencies) | PASS Clean | 0 high+ vulns |
+| **StrykerJS** | Mutation Testing | LOW 0pct | Score: 0% |
+| **OWASP ZAP** | DAST | PASS Clean | 0 alerts |
+| **Burp Suite** | Penetration Test | Skipped | - passed, - failed |
 
-> Last scan: **2026-04-07 04:00 UTC** by **m539rajesh** — [View run](https://github.com/BudgeBucket/budgebucket-status/actions/runs/24063535266)
+> Last scan: **2026-04-07 04:11 UTC** by **m539rajesh** | [View run](https://github.com/BudgeBucket/budgebucket-status/actions/runs/24063798256)
 
 <!-- SECURITY_TABLE_END -->
 
