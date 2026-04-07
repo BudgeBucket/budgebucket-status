@@ -1,10 +1,10 @@
 {
-  "timestamp": "2026-04-07 04:11 UTC",
-  "run_url": "https://github.com/BudgeBucket/budgebucket-status/actions/runs/24063798256",
+  "timestamp": "2026-04-07 04:19 UTC",
+  "run_url": "https://github.com/BudgeBucket/budgebucket-status/actions/runs/24064006851",
   "triggered_by": "m539rajesh",
   "semgrep": { "findings": "0", "status": "PASS Clean" },
   "snyk": { "findings": "0", "status": "PASS Clean" },
   "stryker": { "score": "0", "status": "LOW 0pct" },
   "zap": { "alerts": "0", "status": "PASS Clean" },
-  "burp": { "passed": "-", "failed": "-", "status": "Skipped" }
+  "burp": { "passed": "13", "failed": "12", "status": "WARN 13ok 12bad" }
 }

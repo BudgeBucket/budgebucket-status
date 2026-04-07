@@ -29,9 +29,9 @@
 | **Snyk** | SCA (Dependencies) | PASS Clean | 0 high+ vulns |
 | **StrykerJS** | Mutation Testing | LOW 0pct | Score: 0% |
 | **OWASP ZAP** | DAST | PASS Clean | 0 alerts |
-| **Burp Suite** | Penetration Test | Skipped | - passed, - failed |
+| **Burp Suite** | Penetration Test | WARN 13ok 12bad | 13 passed, 12 failed |
 
-> Last scan: **2026-04-07 04:11 UTC** by **m539rajesh** | [View run](https://github.com/BudgeBucket/budgebucket-status/actions/runs/24063798256)
+> Last scan: **2026-04-07 04:19 UTC** by **m539rajesh** | [View run](https://github.com/BudgeBucket/budgebucket-status/actions/runs/24064006851)
 
 <!-- SECURITY_TABLE_END -->
 
