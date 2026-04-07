@@ -324,8 +324,8 @@ jobs:
       - name: Install services
         working-directory: workspace
         run: |
-          # Install shared first
-          cd budgebucket-shared && npm install --ignore-scripts 2>/dev/null || true && cd ..
+          # Install shared first + generate Prisma client
+          cd budgebucket-shared && npm install 2>/dev/null || true && npx prisma generate 2>/dev/null || true && cd ..
 
           for svc in budgebucket-gateway budgebucket-admin-service budgebucket-auth-service budgebucket-client-service budgebucket-engagement-service budgebucket-lookup-service budgebucket-mailbox-service; do
             echo "=== Installing $svc ==="
@@ -420,7 +420,8 @@ jobs:
       - name: Install services
         working-directory: workspace
         run: |
-          cd budgebucket-shared && npm install --ignore-scripts 2>/dev/null || true && cd ..
+          # Install shared first + generate Prisma client
+          cd budgebucket-shared && npm install 2>/dev/null || true && npx prisma generate 2>/dev/null || true && cd ..
 
           for svc in budgebucket-gateway budgebucket-admin-service budgebucket-auth-service budgebucket-client-service budgebucket-engagement-service budgebucket-lookup-service budgebucket-mailbox-service; do
             echo "=== Installing $svc ==="
@@ -468,16 +469,19 @@ jobs:
           echo "$OUTPUT"
           set -e
 
-          PASSED=$(echo "$OUTPUT" | grep -c "PASS:" || echo "0")
-          FAILED=$(echo "$OUTPUT" | grep -c "FAIL:" || echo "0")
-          echo "passed=$PASSED" >> "$GITHUB_OUTPUT"
-          echo "failed=$FAILED" >> "$GITHUB_OUTPUT"
-
-          if [ "$FAILED" -gt "0" ]; then
-            echo "status=WARN ${PASSED}ok ${FAILED}bad" >> "$GITHUB_OUTPUT"
-          else
-            echo "status=PASS ${PASSED}/${PASSED} passed" >> "$GITHUB_OUTPUT"
-          fi
+          PASSED=$(echo "$OUTPUT" | grep -c "PASS:" || true)
+          FAILED=$(echo "$OUTPUT" | grep -c "FAIL:" || true)
+          [ -z "$PASSED" ] && PASSED=0
+          [ -z "$FAILED" ] && FAILED=0
+          {
+            echo "passed=${PASSED}"
+            echo "failed=${FAILED}"
+            if [ "$FAILED" -gt "0" ]; then
+              echo "status=WARN ${PASSED}ok ${FAILED}bad"
+            else
+              echo "status=PASS ${PASSED}/${PASSED} passed"
+            fi
+          } >> "$GITHUB_OUTPUT"
 
   # ─── Publish results to README ───
   publish-results:
