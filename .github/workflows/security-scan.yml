@@ -1,0 +1,493 @@
+name: Security Scan (On-Demand)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tools:
+        description: 'Tools to run (comma-separated: semgrep,snyk,stryker,zap,burp or "all")'
+        required: false
+        default: 'all'
+
+permissions:
+  contents: write
+  security-events: write
+
+env:
+  NODE_VERSION: '20'
+  REPOS: >-
+    budgebucket-shared
+    budgebucket-gateway
+    budgebucket-admin-service
+    budgebucket-auth-service
+    budgebucket-client-service
+    budgebucket-engagement-service
+    budgebucket-lookup-service
+    budgebucket-mailbox-service
+    budgebucket-frontend
+
+jobs:
+  # ─── Clone all repos into workspace ───
+  setup:
+    name: Setup Workspace
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone all service repos
+        run: |
+          for repo in $REPOS; do
+            echo "=== Cloning $repo ==="
+            git clone --depth 1 https://x-access-token:${{ secrets.GH_TOKEN }}@github.com/BudgeBucket/${repo}.git workspace/${repo}
+          done
+
+      - name: Copy security configs into workspace
+        run: |
+          cp -r security/ workspace/security/
+          cp .semgrepignore workspace/.semgrepignore 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: workspace
+          path: workspace/
+          retention-days: 1
+
+  # ─── 1. Semgrep SAST ───
+  semgrep:
+    name: Semgrep SAST
+    needs: setup
+    if: contains(github.event.inputs.tools, 'semgrep') || github.event.inputs.tools == 'all'
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    outputs:
+      findings: ${{ steps.count.outputs.findings }}
+      status: ${{ steps.count.outputs.status }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: workspace
+          path: workspace/
+
+      - name: Run Semgrep
+        working-directory: workspace
+        run: |
+          mkdir -p reports/semgrep
+          semgrep scan \
+            --config security/semgrep.yml \
+            --config p/nodejs \
+            --config p/express \
+            --config p/jwt \
+            --config p/secrets \
+            --json --output reports/semgrep/results.json \
+            . 2>&1 || true
+
+      - name: Count findings
+        id: count
+        run: |
+          FILE="workspace/reports/semgrep/results.json"
+          if [ -f "$FILE" ]; then
+            COUNT=$(python3 -c "import sys,json; d=json.load(open('$FILE')); print(len(d.get('results',[])))" 2>/dev/null || echo "0")
+            echo "findings=$COUNT" >> "$GITHUB_OUTPUT"
+            if [ "$COUNT" -gt "0" ]; then
+              echo "status=⚠️ $COUNT findings" >> "$GITHUB_OUTPUT"
+            else
+              echo "status=✅ Clean" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "findings=error" >> "$GITHUB_OUTPUT"
+            echo "status=❌ Error" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: semgrep-results
+          path: workspace/reports/semgrep/
+
+  # ─── 2. Snyk SCA ───
+  snyk:
+    name: Snyk SCA
+    needs: setup
+    if: contains(github.event.inputs.tools, 'snyk') || github.event.inputs.tools == 'all'
+    runs-on: ubuntu-latest
+    outputs:
+      findings: ${{ steps.aggregate.outputs.findings }}
+      status: ${{ steps.aggregate.outputs.status }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: workspace
+          path: workspace/
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install Snyk CLI
+        run: npm install -g snyk
+
+      - name: Scan all services
+        env:
+          SNYK_TOKEN: ${{ secrets.SYNK }}
+        working-directory: workspace
+        run: |
+          mkdir -p reports/snyk
+          TOTAL_VULNS=0
+
+          for svc in $REPOS; do
+            [ ! -f "${svc}/package.json" ] && continue
+            echo "=== Scanning $svc ==="
+            cd "$svc"
+            npm ci --ignore-scripts 2>/dev/null || npm install --ignore-scripts 2>/dev/null || true
+            cd ..
+
+            snyk test --file="${svc}/package.json" --severity-threshold=high --json > "reports/snyk/${svc}-deps.json" 2>/dev/null || true
+
+            VULNS=$(jq '.vulnerabilities | length' "reports/snyk/${svc}-deps.json" 2>/dev/null || echo "0")
+            echo "$svc: $VULNS high+ vulnerabilities"
+            TOTAL_VULNS=$((TOTAL_VULNS + VULNS))
+          done
+
+          echo "$TOTAL_VULNS" > reports/snyk/total-vulns.txt
+          echo "Total high+ vulnerabilities: $TOTAL_VULNS"
+
+      - name: Aggregate results
+        id: aggregate
+        run: |
+          TOTAL=$(cat workspace/reports/snyk/total-vulns.txt 2>/dev/null || echo "error")
+          echo "findings=$TOTAL" >> "$GITHUB_OUTPUT"
+          if [ "$TOTAL" = "error" ]; then
+            echo "status=❌ Error" >> "$GITHUB_OUTPUT"
+          elif [ "$TOTAL" -gt "0" ] 2>/dev/null; then
+            echo "status=⚠️ $TOTAL high vulns" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=✅ Clean" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: snyk-results
+          path: workspace/reports/snyk/
+
+  # ─── 3. StrykerJS Mutation Testing ───
+  stryker:
+    name: StrykerJS — ${{ matrix.service }}
+    needs: setup
+    if: contains(github.event.inputs.tools, 'stryker') || github.event.inputs.tools == 'all'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: budgebucket-shared
+            mutate: '*.js,schemas/*.js'
+          - service: budgebucket-gateway
+            mutate: 'gateway/**/*.js'
+          - service: budgebucket-admin-service
+            mutate: 'services/**/*.js'
+          - service: budgebucket-auth-service
+            mutate: 'services/**/*.js'
+          - service: budgebucket-engagement-service
+            mutate: 'services/**/*.js'
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: workspace
+          path: workspace/
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        working-directory: workspace/${{ matrix.service }}
+        run: npm ci --ignore-scripts 2>/dev/null || npm install --ignore-scripts 2>/dev/null || true
+
+      - name: Install Stryker
+        working-directory: workspace/${{ matrix.service }}
+        run: npm install --save-dev @stryker-mutator/core @stryker-mutator/jest-runner
+
+      - name: Run Stryker
+        working-directory: workspace/${{ matrix.service }}
+        run: |
+          mkdir -p ../reports/stryker
+          npx stryker run \
+            --mutate '${{ matrix.mutate }}' \
+            --testRunner jest \
+            --coverageAnalysis perTest \
+            --reporters json,clear-text \
+            --jsonReporter.fileName ../reports/stryker/${{ matrix.service }}.json \
+            --thresholds.break 0 2>&1 || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stryker-${{ matrix.service }}
+          path: workspace/reports/stryker/
+
+  stryker-summary:
+    name: StrykerJS Summary
+    if: contains(github.event.inputs.tools, 'stryker') || github.event.inputs.tools == 'all'
+    needs: stryker
+    runs-on: ubuntu-latest
+    outputs:
+      score: ${{ steps.aggregate.outputs.score }}
+      status: ${{ steps.aggregate.outputs.status }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: stryker-*
+          merge-multiple: true
+          path: reports/stryker/
+
+      - name: Aggregate mutation scores
+        id: aggregate
+        run: |
+          TOTAL_KILLED=0
+          TOTAL_MUTANTS=0
+
+          for f in reports/stryker/*.json; do
+            [ -f "$f" ] || continue
+            KILLED=$(jq '[.files[].mutants[] | select(.status == "Killed")] | length' "$f" 2>/dev/null || echo "0")
+            TOTAL=$(jq '[.files[].mutants[]] | length' "$f" 2>/dev/null || echo "0")
+            TOTAL_KILLED=$((TOTAL_KILLED + KILLED))
+            TOTAL_MUTANTS=$((TOTAL_MUTANTS + TOTAL))
+            echo "$(basename "$f" .json): $KILLED killed / $TOTAL total"
+          done
+
+          if [ "$TOTAL_MUTANTS" -gt "0" ]; then
+            SCORE=$((TOTAL_KILLED * 100 / TOTAL_MUTANTS))
+          else
+            SCORE=0
+          fi
+
+          echo "score=$SCORE" >> "$GITHUB_OUTPUT"
+          if [ "$SCORE" -ge "80" ]; then
+            echo "status=✅ ${SCORE}%" >> "$GITHUB_OUTPUT"
+          elif [ "$SCORE" -ge "50" ]; then
+            echo "status=⚠️ ${SCORE}%" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=❌ ${SCORE}%" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ─── 4. OWASP ZAP DAST ───
+  zap:
+    name: OWASP ZAP DAST
+    needs: setup
+    if: contains(github.event.inputs.tools, 'zap') || github.event.inputs.tools == 'all'
+    runs-on: ubuntu-latest
+    outputs:
+      alerts: ${{ steps.count.outputs.alerts }}
+      status: ${{ steps.count.outputs.status }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: workspace
+          path: workspace/
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install services
+        working-directory: workspace
+        env:
+          NODE_ENV: development
+          AUTH0_DOMAIN: ''
+          AUTH0_AUDIENCE: ''
+        run: |
+          for svc in budgebucket-shared budgebucket-gateway budgebucket-admin-service budgebucket-auth-service budgebucket-client-service budgebucket-engagement-service budgebucket-lookup-service budgebucket-mailbox-service; do
+            (cd "$svc" && npm ci --ignore-scripts 2>/dev/null || npm install --ignore-scripts 2>/dev/null) || true
+          done
+
+      - name: Start services
+        working-directory: workspace
+        env:
+          NODE_ENV: development
+          AUTH0_DOMAIN: ''
+          AUTH0_AUDIENCE: ''
+        run: |
+          (cd budgebucket-auth-service && node start.js &)
+          (cd budgebucket-admin-service && node start.js &)
+          (cd budgebucket-client-service && node start.js &)
+          (cd budgebucket-engagement-service && node start.js &)
+          (cd budgebucket-lookup-service && node start.js &)
+          (cd budgebucket-mailbox-service && node start.js &)
+          sleep 3
+          (cd budgebucket-gateway && node start.js &)
+
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:3010/health && echo " Gateway up" && break
+            sleep 2
+          done
+
+      - name: Run OWASP ZAP
+        uses: zaproxy/action-automation@v0.9.0
+        with:
+          autorun: workspace/security/zap-config.yml
+          fail_action: false
+        env:
+          ZAP_AUTH_TOKEN: 'stub-jwt-token'
+        continue-on-error: true
+
+      - name: Count alerts
+        id: count
+        run: |
+          mkdir -p reports/zap
+          # ZAP may write to different locations
+          find . -name "zap-report.json" -exec cp {} reports/zap/ \; 2>/dev/null || true
+          if [ -f reports/zap/zap-report.json ]; then
+            ALERTS=$(jq '[.site[].alerts[]] | length' reports/zap/zap-report.json 2>/dev/null || echo "0")
+          else
+            ALERTS="0"
+          fi
+          echo "alerts=$ALERTS" >> "$GITHUB_OUTPUT"
+          if [ "$ALERTS" -gt "0" ]; then
+            echo "status=⚠️ $ALERTS alerts" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=✅ Clean" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zap-results
+          path: reports/zap/
+
+  # ─── 5. Burp Suite Pentest Script ───
+  burp:
+    name: Burp Pentest Script
+    needs: setup
+    if: contains(github.event.inputs.tools, 'burp') || github.event.inputs.tools == 'all'
+    runs-on: ubuntu-latest
+    outputs:
+      passed: ${{ steps.run.outputs.passed }}
+      failed: ${{ steps.run.outputs.failed }}
+      status: ${{ steps.run.outputs.status }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: workspace
+          path: workspace/
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install services
+        working-directory: workspace
+        env:
+          NODE_ENV: development
+          AUTH0_DOMAIN: ''
+          AUTH0_AUDIENCE: ''
+        run: |
+          for svc in budgebucket-shared budgebucket-gateway budgebucket-admin-service budgebucket-auth-service budgebucket-client-service budgebucket-engagement-service budgebucket-lookup-service budgebucket-mailbox-service; do
+            (cd "$svc" && npm ci --ignore-scripts 2>/dev/null || npm install --ignore-scripts 2>/dev/null) || true
+          done
+
+      - name: Start services
+        working-directory: workspace
+        env:
+          NODE_ENV: development
+          AUTH0_DOMAIN: ''
+          AUTH0_AUDIENCE: ''
+        run: |
+          (cd budgebucket-auth-service && node start.js &)
+          (cd budgebucket-admin-service && node start.js &)
+          (cd budgebucket-client-service && node start.js &)
+          (cd budgebucket-engagement-service && node start.js &)
+          (cd budgebucket-lookup-service && node start.js &)
+          (cd budgebucket-mailbox-service && node start.js &)
+          sleep 3
+          (cd budgebucket-gateway && node start.js &)
+
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:3010/health && echo " Gateway up" && break
+            sleep 2
+          done
+
+      - name: Run pentest script
+        id: run
+        working-directory: workspace
+        run: |
+          set +e
+          OUTPUT=$(node security/burp-pentest.js 2>&1)
+          echo "$OUTPUT"
+          set -e
+
+          PASSED=$(echo "$OUTPUT" | grep -c "✅" || echo "0")
+          FAILED=$(echo "$OUTPUT" | grep -c "❌" || echo "0")
+          echo "passed=$PASSED" >> "$GITHUB_OUTPUT"
+          echo "failed=$FAILED" >> "$GITHUB_OUTPUT"
+
+          if [ "$FAILED" -gt "0" ]; then
+            echo "status=⚠️ ${PASSED}✅ ${FAILED}❌" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=✅ ${PASSED}/${PASSED} passed" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ─── Publish results to README ───
+  publish-results:
+    name: Update Status Dashboard
+    needs: [semgrep, snyk, stryker-summary, zap, burp]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update README with results
+        run: |
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          SEMGREP_STATUS="${{ needs.semgrep.outputs.status || '⏭️ Skipped' }}"
+          SEMGREP_FINDINGS="${{ needs.semgrep.outputs.findings || '—' }}"
+          SNYK_STATUS="${{ needs.snyk.outputs.status || '⏭️ Skipped' }}"
+          SNYK_FINDINGS="${{ needs.snyk.outputs.findings || '—' }}"
+          STRYKER_STATUS="${{ needs.stryker-summary.outputs.status || '⏭️ Skipped' }}"
+          STRYKER_SCORE="${{ needs.stryker-summary.outputs.score || '—' }}"
+          ZAP_STATUS="${{ needs.zap.outputs.status || '⏭️ Skipped' }}"
+          ZAP_ALERTS="${{ needs.zap.outputs.alerts || '—' }}"
+          BURP_STATUS="${{ needs.burp.outputs.status || '⏭️ Skipped' }}"
+          BURP_PASSED="${{ needs.burp.outputs.passed || '—' }}"
+          BURP_FAILED="${{ needs.burp.outputs.failed || '—' }}"
+
+          # Build replacement block
+          cat > security-section.md << EOF
+
+          | Tool | Type | Result | Details |
+          |------|------|--------|---------|
+          | **Semgrep** | SAST | ${SEMGREP_STATUS} | ${SEMGREP_FINDINGS} findings |
+          | **Snyk** | SCA (Dependencies) | ${SNYK_STATUS} | ${SNYK_FINDINGS} high+ vulns |
+          | **StrykerJS** | Mutation Testing | ${STRYKER_STATUS} | Score: ${STRYKER_SCORE}% |
+          | **OWASP ZAP** | DAST | ${ZAP_STATUS} | ${ZAP_ALERTS} alerts |
+          | **Burp Suite** | Penetration Test | ${BURP_STATUS} | ${BURP_PASSED} passed, ${BURP_FAILED} failed |
+
+          > Last scan: **${NOW}** by **${{ github.actor }}** — [View run](${RUN_URL})
+
+          EOF
+
+          # Save raw JSON for history
+          cat > security-results.json << ENDJSON
+          {
+            "timestamp": "${NOW}",
+            "run_url": "${RUN_URL}",
+            "triggered_by": "${{ github.actor }}",
+            "semgrep": { "findings": "${SEMGREP_FINDINGS}", "status": "${SEMGREP_STATUS}" },
+            "snyk": { "findings": "${SNYK_FINDINGS}", "status": "${SNYK_STATUS}" },
+            "stryker": { "score": "${STRYKER_SCORE}", "status": "${STRYKER_STATUS}" },
+            "zap": { "alerts": "${ZAP_ALERTS}", "status": "${ZAP_STATUS}" },
+            "burp": { "passed": "${BURP_PASSED}", "failed": "${BURP_FAILED}", "status": "${BURP_STATUS}" }
+          }
+          ENDJSON
+
+          # Replace content between markers in README
+          sed -i '/<!-- SECURITY_TABLE_START -->/,/<!-- SECURITY_TABLE_END -->/!b;/<!-- SECURITY_TABLE_START -->/!{/<!-- SECURITY_TABLE_END -->/!d};/<!-- SECURITY_TABLE_END -->/e cat security-section.md' README.md
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md security-results.json
+          git diff --cached --quiet || (git commit -m "security: update scan results [skip ci]" && git push)

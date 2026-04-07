@@ -1,0 +1,178 @@
+{
+  "project_options": {
+    "connections": {
+      "hostname_resolution": [],
+      "out_of_scope_requests": {
+        "advanced_mode": true,
+        "drop": false,
+        "exclude": [
+          { "enabled": true, "host": ".*\\.google\\.com", "protocol": "any" },
+          { "enabled": true, "host": ".*\\.googleapis\\.com", "protocol": "any" },
+          { "enabled": true, "host": ".*\\.gstatic\\.com", "protocol": "any" },
+          { "enabled": true, "host": ".*\\.auth0\\.com", "protocol": "any" }
+        ],
+        "scope_option": "use_advanced_scope_control"
+      },
+      "platform_authentication": {
+        "credentials": [],
+        "do_platform_authentication": false,
+        "prompt_on_authentication_failure": false
+      }
+    },
+    "http": {
+      "redirections": {
+        "follow_redirections": "in_scope_only"
+      }
+    },
+    "misc": {
+      "logging": {
+        "requests": { "all_tools": false, "proxy": true, "scanner": true },
+        "responses": { "all_tools": false, "proxy": true, "scanner": true }
+      }
+    },
+    "sessions": {
+      "session_handling_rules": {
+        "rules": [
+          {
+            "actions": [
+              {
+                "add_custom_header": {
+                  "header_name": "Authorization",
+                  "header_value": "Bearer <AUTH_TOKEN>",
+                  "enabled": true
+                },
+                "type": "add_custom_header"
+              },
+              {
+                "add_custom_header": {
+                  "header_name": "Content-Type",
+                  "header_value": "application/json",
+                  "enabled": true
+                },
+                "type": "add_custom_header"
+              }
+            ],
+            "description": "BudgeBucket API Auth Header",
+            "enabled": true,
+            "restrict_scope_to_named_params": false,
+            "tools_scope": ["Scanner", "Repeater", "Intruder", "Sequencer"],
+            "url_scope": "suite",
+            "url_scope_advanced_mode": {
+              "include": [
+                { "enabled": true, "host": "localhost", "port": "3010", "protocol": "http" },
+                { "enabled": true, "host": "api.budgebucket.com", "protocol": "https" }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  "target": {
+    "scope": {
+      "advanced_mode": true,
+      "include": [
+        { "enabled": true, "host": "localhost", "port": "3010", "protocol": "http", "file": "/api/v1/.*" },
+        { "enabled": true, "host": "api.budgebucket.com", "protocol": "https", "file": "/api/v1/.*" }
+      ],
+      "exclude": [
+        { "enabled": true, "file": "/health" },
+        { "enabled": true, "host": ".*\\.auth0\\.com" }
+      ]
+    }
+  },
+  "scanner": {
+    "active_scanning_optimization": {
+      "scan_speed": "normal",
+      "scan_accuracy": "normal"
+    },
+    "active_scanning_areas": {
+      "insertion_point_types": {
+        "url_path_filename": true,
+        "url_path_folders": true,
+        "url_params": true,
+        "body_params": true,
+        "cookies": false,
+        "param_name": true,
+        "amf": false,
+        "header_bearer_token": true,
+        "header_custom": true
+      }
+    },
+    "scan_checks": {
+      "individual_checks": {
+        "sql_injection": { "enabled": true, "consolidation": "per_param" },
+        "xss_reflected": { "enabled": true },
+        "xss_stored": { "enabled": true },
+        "os_command_injection": { "enabled": true },
+        "path_traversal": { "enabled": true },
+        "server_side_template_injection": { "enabled": true },
+        "http_request_smuggling": { "enabled": true },
+        "server_side_request_forgery": { "enabled": true },
+        "open_redirection": { "enabled": true },
+        "header_injection": { "enabled": true },
+        "cors_misconfiguration": { "enabled": true },
+        "jwt_attacks": { "enabled": true },
+        "idor": { "enabled": true }
+      }
+    },
+    "error_handling": {
+      "consecutive_insertion_point_errors": 5,
+      "consecutive_audit_item_errors": 10,
+      "number_of_follow_up_passes": 1,
+      "pause_task_failed_action": "do_not_pause"
+    }
+  },
+  "intruder": {
+    "budgebucket_attack_configs": {
+      "_comment": "Pre-configured Intruder attacks for BudgeBucket-specific tests",
+      "tenant_isolation_test": {
+        "description": "Test IDOR by iterating tenant IDs on division endpoints",
+        "request_template": "GET /api/v1/divisions HTTP/1.1\nHost: localhost:3010\nAuthorization: Bearer <AUTH_TOKEN>\nX-Tenant-Override: §1§\n\n",
+        "payload_type": "numbers",
+        "payload_options": { "from": 1, "to": 100, "step": 1 },
+        "grep_match": ["divisionId", "divisionName", "tenantId"]
+      },
+      "auth_bypass_test": {
+        "description": "Test auth bypass with malformed tokens",
+        "request_template": "GET /api/v1/divisions HTTP/1.1\nHost: localhost:3010\nAuthorization: §Bearer token§\n\n",
+        "payload_type": "simple_list",
+        "payloads": [
+          "",
+          "Bearer ",
+          "Bearer null",
+          "Bearer undefined",
+          "Bearer eyJhbGciOiJub25lIn0.eyJzdWIiOiIxIn0.",
+          "Basic YWRtaW46YWRtaW4=",
+          "Bearer {{jwt_none_algorithm}}"
+        ]
+      },
+      "rate_limit_test": {
+        "description": "Verify rate limiting works under load",
+        "request_template": "GET /api/v1/divisions HTTP/1.1\nHost: localhost:3010\nAuthorization: Bearer <AUTH_TOKEN>\n\n",
+        "payload_type": "null_payloads",
+        "payload_options": { "count": 250 },
+        "grep_match": ["Rate limit exceeded", "429"],
+        "throttle_ms": 0
+      }
+    }
+  },
+  "match_replace_rules": [
+    {
+      "comment": "Strip tenantId from request bodies to test tenantGuard",
+      "enabled": false,
+      "is_regex": true,
+      "rule_type": "request_body",
+      "string_match": "\"tenantId\":\\s*\\d+,?",
+      "string_replace": ""
+    },
+    {
+      "comment": "Inject tenantId to test tenantGuard rejection",
+      "enabled": false,
+      "is_regex": false,
+      "rule_type": "request_body",
+      "string_match": "{",
+      "string_replace": "{\"tenantId\":999,"
+    }
+  ]
+}

@@ -17,6 +17,24 @@
 | **Shared Library** | ![Shared](https://github.com/BudgeBucket/budgebucket-shared/actions/workflows/deploy.yml/badge.svg) | [View Runs](https://github.com/BudgeBucket/budgebucket-shared/actions) |
 | **Infrastructure** | No CI/CD | [Migrations](https://github.com/BudgeBucket/budgebucket-infra) |
 
+## Security Scans
+
+> Triggered on-demand via [workflow_dispatch](https://github.com/BudgeBucket/github-repos/actions/workflows/security-scan.yml). Results auto-update below.
+
+<!-- SECURITY_TABLE_START -->
+
+| Tool | Type | Result | Details |
+|------|------|--------|---------|
+| **Semgrep** | SAST | ⏳ Pending | — |
+| **Snyk** | SCA (Dependencies) | ⏳ Pending | — |
+| **StrykerJS** | Mutation Testing | ⏳ Pending | — |
+| **OWASP ZAP** | DAST | ⏳ Pending | — |
+| **Burp Suite** | Penetration Test | ⏳ Pending | — |
+
+> _No scan has been run yet. Trigger one from [Actions](https://github.com/BudgeBucket/github-repos/actions/workflows/security-scan.yml)._
+
+<!-- SECURITY_TABLE_END -->
+
 ## Architecture
 
 ```

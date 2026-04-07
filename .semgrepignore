@@ -1,0 +1,12 @@
+node_modules/
+coverage/
+reports/
+.github/
+budgebucket-azure-functions/
+budgebucket-infra/migrations/
+budgebucket-infra/seeds/
+__tests__/
+*.test.js
+*.config.js
+*.config.mjs
+package-lock.json

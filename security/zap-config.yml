@@ -1,0 +1,198 @@
+---
+# OWASP ZAP Automation Framework — BudgeBucket API DAST Scan
+# Run: docker run -v $(pwd)/security:/zap/wrk -t ghcr.io/zaproxy/zaproxy:stable zap.sh -cmd -autorun /zap/wrk/zap-config.yml
+
+env:
+  contexts:
+    - name: BudgeBucket API
+      urls:
+        - http://localhost:3010
+      includePaths:
+        - "http://localhost:3010/api/v1/.*"
+      excludePaths:
+        - "http://localhost:3010/health"
+      authentication:
+        method: header
+        parameters:
+          headerName: Authorization
+          headerValue: "Bearer ${ZAP_AUTH_TOKEN}"
+      technology:
+        include:
+          - Node.js
+          - Express
+          - JavaScript
+  parameters:
+    failOnError: true
+    failOnWarning: false
+    progressToStdout: true
+
+jobs:
+  # 1. OpenAPI import — feed ZAP the API surface
+  - type: openapi
+    parameters:
+      apiUrl: http://localhost:3010/api/v1
+      targetUrl: http://localhost:3010
+    # If no OpenAPI spec, ZAP will spider instead
+
+  # 2. Spider the API to discover endpoints
+  - type: spider
+    parameters:
+      url: http://localhost:3010/api/v1
+      maxDuration: 5
+      maxDepth: 5
+      maxChildren: 20
+
+  # 3. Ajax spider for any JS-rendered content
+  - type: spiderAjax
+    parameters:
+      url: http://localhost:3010
+      maxDuration: 2
+      maxCrawlDepth: 3
+
+  # 4. Passive scan — analyze all proxied traffic
+  - type: passiveScan-config
+    parameters:
+      maxAlertsPerRule: 10
+      scanOnlyInScope: true
+      maxBodySizeInBytesToScan: 100000
+    rules:
+      # Enforce security headers
+      - id: 10038  # Content Security Policy
+        threshold: medium
+      - id: 10037  # X-Content-Type-Options
+        threshold: medium
+      - id: 10036  # Server header info leak
+        threshold: low
+      - id: 10035  # Strict-Transport-Security
+        threshold: medium
+      - id: 10021  # X-Content-Type-Options
+        threshold: medium
+      - id: 10020  # X-Frame-Options
+        threshold: medium
+
+  - type: passiveScan-wait
+    parameters:
+      maxDuration: 5
+
+  # 5. Active scan — test for vulnerabilities
+  - type: activeScan
+    parameters:
+      url: http://localhost:3010/api/v1
+      maxRuleDurationInMins: 5
+      maxScanDurationInMins: 30
+      maxAlertsPerRule: 5
+    policyDefinition:
+      rules:
+        # SQL Injection
+        - id: 40018
+          strength: high
+          threshold: medium
+        # Cross-Site Scripting (Reflected)
+        - id: 40012
+          strength: high
+          threshold: medium
+        # Cross-Site Scripting (Persistent)
+        - id: 40014
+          strength: high
+          threshold: medium
+        # Path Traversal
+        - id: 6
+          strength: medium
+          threshold: medium
+        # Remote File Inclusion
+        - id: 7
+          strength: medium
+          threshold: medium
+        # Server Side Include
+        - id: 40009
+          strength: medium
+          threshold: medium
+        # CRLF Injection
+        - id: 40003
+          strength: medium
+          threshold: medium
+        # Parameter Tampering
+        - id: 40008
+          strength: medium
+          threshold: medium
+        # IDOR — Integer-based IDs
+        - id: 40013
+          strength: high
+          threshold: low
+        # CORS misconfiguration
+        - id: 40040
+          strength: high
+          threshold: medium
+
+  # 6. Custom scripts — BudgeBucket-specific tests
+  - type: requestor
+    parameters:
+      # Test tenant isolation: try accessing another tenant's data
+      requests:
+        # Attempt to pass tenantId in body (should be blocked by tenantGuard)
+        - url: http://localhost:3010/api/v1/divisions
+          method: POST
+          httpVersion: HTTP/1.1
+          headers:
+            - name: Content-Type
+              value: application/json
+            - name: Authorization
+              value: "Bearer ${ZAP_AUTH_TOKEN}"
+          body: '{"divisionName":"ZAP Test","tenantId":999}'
+          responseCode: 403
+
+        # Attempt to pass tenantId in query string
+        - url: http://localhost:3010/api/v1/divisions?tenantId=999
+          method: GET
+          httpVersion: HTTP/1.1
+          headers:
+            - name: Authorization
+              value: "Bearer ${ZAP_AUTH_TOKEN}"
+          responseCode: 403
+
+        # Test rate limiting — rapid fire
+        - url: http://localhost:3010/api/v1/divisions
+          method: GET
+          httpVersion: HTTP/1.1
+          headers:
+            - name: Authorization
+              value: "Bearer ${ZAP_AUTH_TOKEN}"
+          responseCode: 200
+
+        # Test missing auth header
+        - url: http://localhost:3010/api/v1/divisions
+          method: GET
+          httpVersion: HTTP/1.1
+          responseCode: 401
+
+        # Test CORS — disallowed origin
+        - url: http://localhost:3010/api/v1/divisions
+          method: OPTIONS
+          httpVersion: HTTP/1.1
+          headers:
+            - name: Origin
+              value: https://evil.com
+            - name: Access-Control-Request-Method
+              value: GET
+
+  # 7. Generate reports
+  - type: report
+    parameters:
+      template: traditional-html-plus
+      reportDir: /zap/wrk/../reports/zap
+      reportFile: zap-report.html
+      reportTitle: BudgeBucket API Security Scan
+      reportDescription: OWASP ZAP DAST scan of BudgeBucket API Gateway
+
+  - type: report
+    parameters:
+      template: traditional-json-plus
+      reportDir: /zap/wrk/../reports/zap
+      reportFile: zap-report.json
+      reportTitle: BudgeBucket API Security Scan
+
+  # 8. Output summary
+  - type: outputSummary
+    parameters:
+      format: long
+      summaryFile: /zap/wrk/../reports/zap/zap-summary.json

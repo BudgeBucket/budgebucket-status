@@ -1,0 +1,206 @@
+rules:
+  # ── Tenant Isolation ──
+  - id: direct-tenantid-in-query
+    patterns:
+      - pattern: |
+          prisma.$MODEL.$METHOD({ where: { ..., tenantId: $VAL, ... } })
+      - pattern-not: |
+          prisma.$MODEL.$METHOD({ where: { ..., tenantId: req.tenantId, ... } })
+    message: >
+      Direct tenantId in Prisma query — tenant filtering should be handled
+      automatically by the tenant extension in db.js. If you must filter manually,
+      use req.tenantId (set by tenantGuard middleware).
+    languages: [javascript]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: "CWE-284: Improper Access Control"
+
+  - id: missing-tenant-guard
+    patterns:
+      - pattern: |
+          app.use($PATH, require($ROUTE));
+      - pattern-not-inside: |
+          app.use(require('@budgebucket/shared').tenantGuard);
+          ...
+    message: >
+      Route mounted without tenantGuard middleware. All service routes must
+      have tenantGuard applied before route handlers to prevent cross-tenant access.
+    languages: [javascript]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-284: Improper Access Control"
+
+  # ── Authentication & Authorization ──
+  - id: route-missing-auth-middleware
+    patterns:
+      - pattern: |
+          app.use($PATH, require($ROUTE));
+      - pattern-not-inside: |
+          app.use(require('@budgebucket/shared').auth);
+          ...
+    message: >
+      Route mounted without auth middleware. Ensure all API routes
+      require authentication via shared auth middleware.
+    languages: [javascript]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-306: Missing Authentication for Critical Function"
+
+  - id: authorize-missing-on-destructive-ops
+    patterns:
+      - pattern: router.delete($PATH, async (req, res, next) => { ... })
+      - pattern-not: router.delete($PATH, authorize(...), ...)
+      - pattern-not: router.delete($PATH, validate(...), ...)
+    message: >
+      DELETE route without explicit authorize() or validate() middleware.
+      Destructive operations should have explicit authorization checks.
+    languages: [javascript]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: "CWE-862: Missing Authorization"
+
+  # ── Injection Prevention ──
+  - id: raw-sql-usage
+    patterns:
+      - pattern-either:
+          - pattern: prisma.$queryRaw(...)
+          - pattern: prisma.$queryRawUnsafe(...)
+          - pattern: prisma.$executeRaw(...)
+          - pattern: prisma.$executeRawUnsafe(...)
+    message: >
+      Raw SQL query detected. These bypass tenant isolation and audit extensions.
+      Use Prisma model queries or db.safeQueryRaw() with explicit tenant filtering.
+    languages: [javascript]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-89: SQL Injection"
+
+  - id: unvalidated-parseint
+    pattern: parseInt(req.$SOURCE.$PARAM)
+    fix: parseInt(req.$SOURCE.$PARAM, 10)
+    message: >
+      parseInt() without radix parameter. Always specify radix 10 to prevent
+      unexpected octal/hex parsing from user input.
+    languages: [javascript]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: "CWE-704: Incorrect Type Conversion"
+
+  - id: string-concat-in-query
+    patterns:
+      - pattern: |
+          prisma.$MODEL.$METHOD({ where: { ..., $FIELD: `...${$VAR}...`, ... } })
+    message: >
+      String interpolation in Prisma query value. Use parameterized values
+      to prevent injection attacks.
+    languages: [javascript]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-89: SQL Injection"
+
+  # ── Sensitive Data Exposure ──
+  - id: hardcoded-secret
+    pattern-either:
+      - pattern: |
+          const $VAR = "...$SECRET...";
+      - pattern: |
+          $VAR = "...$SECRET...";
+    metavariable-pattern:
+      metavariable: $VAR
+      pattern-either:
+        - pattern: password
+        - pattern: secret
+        - pattern: apiKey
+        - pattern: token
+        - pattern: connectionString
+    message: >
+      Potential hardcoded secret. Use environment variables via process.env instead.
+    languages: [javascript]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-798: Use of Hard-coded Credentials"
+
+  - id: sensitive-data-in-log
+    patterns:
+      - pattern-either:
+          - pattern: console.log(..., req.headers.authorization, ...)
+          - pattern: console.log(..., $TOKEN, ...)
+          - pattern: console.error(..., req.headers.authorization, ...)
+      - metavariable-regex:
+          metavariable: $TOKEN
+          regex: (token|password|secret|apiKey|auth0Sub)
+    message: >
+      Sensitive data may be logged. Avoid logging tokens, passwords, or secrets.
+    languages: [javascript]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-532: Insertion of Sensitive Information into Log File"
+
+  - id: error-stack-in-response
+    patterns:
+      - pattern-either:
+          - pattern: res.json({ ..., stack: $ERR.stack, ... })
+          - pattern: res.json({ ..., error: $ERR, ... })
+          - pattern: res.status($CODE).json({ ..., stack: ..., ... })
+    message: >
+      Error stack trace or raw error object sent in API response.
+      This leaks internal implementation details. Return a generic error message.
+    languages: [javascript]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-209: Generation of Error Message Containing Sensitive Information"
+
+  # ── CORS & Headers ──
+  - id: cors-wildcard
+    pattern: |
+      app.use(cors({ origin: true }))
+    message: >
+      CORS with origin:true reflects any origin. In production services behind
+      the gateway this is acceptable, but verify this service is not directly exposed.
+    languages: [javascript]
+    severity: INFO
+    metadata:
+      category: security
+      cwe: "CWE-346: Origin Validation Error"
+
+  # ── Input Validation ──
+  - id: missing-body-validation
+    patterns:
+      - pattern: |
+          router.post($PATH, async (req, res, next) => {
+            ...
+            const { ..., $FIELD, ... } = req.body;
+            ...
+          })
+      - pattern-not: router.post($PATH, validate(...), ...)
+    message: >
+      POST route handler destructures req.body without validate() middleware.
+      All user input should be validated and sanitized via Zod schemas.
+    languages: [javascript]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: "CWE-20: Improper Input Validation"
+
+  # ── Prototype Pollution ──
+  - id: object-spread-from-body
+    pattern: |
+      { ...$SPREAD, ...req.body }
+    message: >
+      Spreading req.body directly into an object can lead to mass assignment.
+      Destructure only the expected fields from req.body.
+    languages: [javascript]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: "CWE-915: Improperly Controlled Modification of Dynamically-Determined Object Attributes"
